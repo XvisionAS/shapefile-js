@@ -1,4 +1,4 @@
-(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.shp = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.shp = f()}})(function(){var define,module,exports;return (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
 (function (Buffer){
 'use strict';
 var Promise = require('lie');
@@ -63,7 +63,7 @@ ParseShp.prototype.parsePoint = function(data) {
 };
 ParseShp.prototype.parseZPoint = function(data) {
   var pointXY = this.parsePoint(data);
-  pointXY.coordinates.push(this.parseCoord(data, 16));
+  pointXY.coordinates.push(data.readDoubleLE(16));
   return pointXY;
 };
 ParseShp.prototype.parsePointArray = function(data, offset, num) {
@@ -344,68 +344,102 @@ for (var i = 0, len = code.length; i < len; ++i) {
   revLookup[code.charCodeAt(i)] = i
 }
 
+// Support decoding URL-safe base64 strings, as Node.js does.
+// See: https://en.wikipedia.org/wiki/Base64#URL_applications
 revLookup['-'.charCodeAt(0)] = 62
 revLookup['_'.charCodeAt(0)] = 63
 
-function placeHoldersCount (b64) {
+function getLens (b64) {
   var len = b64.length
+
   if (len % 4 > 0) {
     throw new Error('Invalid string. Length must be a multiple of 4')
   }
 
-  // the number of equal signs (place holders)
-  // if there are two placeholders, than the two characters before it
-  // represent one byte
-  // if there is only one, then the three characters before it represent 2 bytes
-  // this is just a cheap hack to not do indexOf twice
-  return b64[len - 2] === '=' ? 2 : b64[len - 1] === '=' ? 1 : 0
+  // Trim off extra bytes after placeholder bytes are found
+  // See: https://github.com/beatgammit/base64-js/issues/42
+  var validLen = b64.indexOf('=')
+  if (validLen === -1) validLen = len
+
+  var placeHoldersLen = validLen === len
+    ? 0
+    : 4 - (validLen % 4)
+
+  return [validLen, placeHoldersLen]
 }
 
+// base64 is 4/3 + up to two characters of the original data
 function byteLength (b64) {
-  // base64 is 4/3 + up to two characters of the original data
-  return (b64.length * 3 / 4) - placeHoldersCount(b64)
+  var lens = getLens(b64)
+  var validLen = lens[0]
+  var placeHoldersLen = lens[1]
+  return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen
+}
+
+function _byteLength (b64, validLen, placeHoldersLen) {
+  return ((validLen + placeHoldersLen) * 3 / 4) - placeHoldersLen
 }
 
 function toByteArray (b64) {
-  var i, l, tmp, placeHolders, arr
-  var len = b64.length
-  placeHolders = placeHoldersCount(b64)
+  var tmp
+  var lens = getLens(b64)
+  var validLen = lens[0]
+  var placeHoldersLen = lens[1]
 
-  arr = new Arr((len * 3 / 4) - placeHolders)
+  var arr = new Arr(_byteLength(b64, validLen, placeHoldersLen))
+
+  var curByte = 0
 
   // if there are placeholders, only get up to the last complete 4 chars
-  l = placeHolders > 0 ? len - 4 : len
+  var len = placeHoldersLen > 0
+    ? validLen - 4
+    : validLen
 
-  var L = 0
-
-  for (i = 0; i < l; i += 4) {
-    tmp = (revLookup[b64.charCodeAt(i)] << 18) | (revLookup[b64.charCodeAt(i + 1)] << 12) | (revLookup[b64.charCodeAt(i + 2)] << 6) | revLookup[b64.charCodeAt(i + 3)]
-    arr[L++] = (tmp >> 16) & 0xFF
-    arr[L++] = (tmp >> 8) & 0xFF
-    arr[L++] = tmp & 0xFF
+  for (var i = 0; i < len; i += 4) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 18) |
+      (revLookup[b64.charCodeAt(i + 1)] << 12) |
+      (revLookup[b64.charCodeAt(i + 2)] << 6) |
+      revLookup[b64.charCodeAt(i + 3)]
+    arr[curByte++] = (tmp >> 16) & 0xFF
+    arr[curByte++] = (tmp >> 8) & 0xFF
+    arr[curByte++] = tmp & 0xFF
   }
 
-  if (placeHolders === 2) {
-    tmp = (revLookup[b64.charCodeAt(i)] << 2) | (revLookup[b64.charCodeAt(i + 1)] >> 4)
-    arr[L++] = tmp & 0xFF
-  } else if (placeHolders === 1) {
-    tmp = (revLookup[b64.charCodeAt(i)] << 10) | (revLookup[b64.charCodeAt(i + 1)] << 4) | (revLookup[b64.charCodeAt(i + 2)] >> 2)
-    arr[L++] = (tmp >> 8) & 0xFF
-    arr[L++] = tmp & 0xFF
+  if (placeHoldersLen === 2) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 2) |
+      (revLookup[b64.charCodeAt(i + 1)] >> 4)
+    arr[curByte++] = tmp & 0xFF
+  }
+
+  if (placeHoldersLen === 1) {
+    tmp =
+      (revLookup[b64.charCodeAt(i)] << 10) |
+      (revLookup[b64.charCodeAt(i + 1)] << 4) |
+      (revLookup[b64.charCodeAt(i + 2)] >> 2)
+    arr[curByte++] = (tmp >> 8) & 0xFF
+    arr[curByte++] = tmp & 0xFF
   }
 
   return arr
 }
 
 function tripletToBase64 (num) {
-  return lookup[num >> 18 & 0x3F] + lookup[num >> 12 & 0x3F] + lookup[num >> 6 & 0x3F] + lookup[num & 0x3F]
+  return lookup[num >> 18 & 0x3F] +
+    lookup[num >> 12 & 0x3F] +
+    lookup[num >> 6 & 0x3F] +
+    lookup[num & 0x3F]
 }
 
 function encodeChunk (uint8, start, end) {
   var tmp
   var output = []
   for (var i = start; i < end; i += 3) {
-    tmp = (uint8[i] << 16) + (uint8[i + 1] << 8) + (uint8[i + 2])
+    tmp =
+      ((uint8[i] << 16) & 0xFF0000) +
+      ((uint8[i + 1] << 8) & 0xFF00) +
+      (uint8[i + 2] & 0xFF)
     output.push(tripletToBase64(tmp))
   }
   return output.join('')
@@ -415,30 +449,33 @@ function fromByteArray (uint8) {
   var tmp
   var len = uint8.length
   var extraBytes = len % 3 // if we have 1 byte left, pad 2 bytes
-  var output = ''
   var parts = []
   var maxChunkLength = 16383 // must be multiple of 3
 
   // go through the array every three bytes, we'll deal with trailing stuff later
   for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
-    parts.push(encodeChunk(uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)))
+    parts.push(encodeChunk(
+      uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)
+    ))
   }
 
   // pad the end with zeros, but make sure to not forget the extra bytes
   if (extraBytes === 1) {
     tmp = uint8[len - 1]
-    output += lookup[tmp >> 2]
-    output += lookup[(tmp << 4) & 0x3F]
-    output += '=='
+    parts.push(
+      lookup[tmp >> 2] +
+      lookup[(tmp << 4) & 0x3F] +
+      '=='
+    )
   } else if (extraBytes === 2) {
-    tmp = (uint8[len - 2] << 8) + (uint8[len - 1])
-    output += lookup[tmp >> 10]
-    output += lookup[(tmp >> 4) & 0x3F]
-    output += lookup[(tmp << 2) & 0x3F]
-    output += '='
+    tmp = (uint8[len - 2] << 8) + uint8[len - 1]
+    parts.push(
+      lookup[tmp >> 10] +
+      lookup[(tmp >> 4) & 0x3F] +
+      lookup[(tmp << 2) & 0x3F] +
+      '='
+    )
   }
-
-  parts.push(output)
 
   return parts.join('')
 }
@@ -2241,7 +2278,7 @@ function isnan (val) {
 },{"base64-js":4,"ieee754":7,"isarray":9}],7:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
-  var eLen = nBytes * 8 - mLen - 1
+  var eLen = (nBytes * 8) - mLen - 1
   var eMax = (1 << eLen) - 1
   var eBias = eMax >> 1
   var nBits = -7
@@ -2254,12 +2291,12 @@ exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   e = s & ((1 << (-nBits)) - 1)
   s >>= (-nBits)
   nBits += eLen
-  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8) {}
+  for (; nBits > 0; e = (e * 256) + buffer[offset + i], i += d, nBits -= 8) {}
 
   m = e & ((1 << (-nBits)) - 1)
   e >>= (-nBits)
   nBits += mLen
-  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8) {}
+  for (; nBits > 0; m = (m * 256) + buffer[offset + i], i += d, nBits -= 8) {}
 
   if (e === 0) {
     e = 1 - eBias
@@ -2274,7 +2311,7 @@ exports.read = function (buffer, offset, isLE, mLen, nBytes) {
 
 exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
   var e, m, c
-  var eLen = nBytes * 8 - mLen - 1
+  var eLen = (nBytes * 8) - mLen - 1
   var eMax = (1 << eLen) - 1
   var eBias = eMax >> 1
   var rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0)
@@ -2307,7 +2344,7 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
       m = 0
       e = eMax
     } else if (e + eBias >= 1) {
-      m = (value * c - 1) * Math.pow(2, mLen)
+      m = ((value * c) - 1) * Math.pow(2, mLen)
       e = e + eBias
     } else {
       m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen)
@@ -5323,6 +5360,26 @@ function Promise(resolver) {
   }
 }
 
+Promise.prototype["finally"] = function (callback) {
+  if (typeof callback !== 'function') {
+    return this;
+  }
+  var p = this.constructor;
+  return this.then(resolve, reject);
+
+  function resolve(value) {
+    function yes () {
+      return value;
+    }
+    return p.resolve(callback()).then(yes);
+  }
+  function reject(reason) {
+    function no () {
+      throw reason;
+    }
+    return p.resolve(callback()).then(no);
+  }
+};
 Promise.prototype["catch"] = function (onRejected) {
   return this.then(null, onRejected);
 };
@@ -6452,6 +6509,22 @@ function Inflate(options) {
   this.header = new GZheader();
 
   zlib_inflate.inflateGetHeader(this.strm, this.header);
+
+  // Setup dictionary
+  if (opt.dictionary) {
+    // Convert data if needed
+    if (typeof opt.dictionary === 'string') {
+      opt.dictionary = strings.string2buf(opt.dictionary);
+    } else if (toString.call(opt.dictionary) === '[object ArrayBuffer]') {
+      opt.dictionary = new Uint8Array(opt.dictionary);
+    }
+    if (opt.raw) { //In raw mode we need to set the dictionary early
+      status = zlib_inflate.inflateSetDictionary(this.strm, opt.dictionary);
+      if (status !== c.Z_OK) {
+        throw new Error(msg[status]);
+      }
+    }
+  }
 }
 
 /**
@@ -6488,7 +6561,6 @@ Inflate.prototype.push = function (data, mode) {
   var dictionary = this.options.dictionary;
   var status, _mode;
   var next_out_utf8, tail, utf8str;
-  var dict;
 
   // Flag to properly process Z_BUF_ERROR on testing inflate call
   // when we check that all output data was flushed.
@@ -6520,17 +6592,7 @@ Inflate.prototype.push = function (data, mode) {
     status = zlib_inflate.inflate(strm, c.Z_NO_FLUSH);    /* no bad return value */
 
     if (status === c.Z_NEED_DICT && dictionary) {
-      // Convert data if needed
-      if (typeof dictionary === 'string') {
-        dict = strings.string2buf(dictionary);
-      } else if (toString.call(dictionary) === '[object ArrayBuffer]') {
-        dict = new Uint8Array(dictionary);
-      } else {
-        dict = dictionary;
-      }
-
-      status = zlib_inflate.inflateSetDictionary(this.strm, dict);
-
+      status = zlib_inflate.inflateSetDictionary(this.strm, dictionary);
     }
 
     if (status === c.Z_BUF_ERROR && allowBufError === true) {
@@ -6918,8 +6980,10 @@ exports.string2buf = function (str) {
 
 // Helper (used in 2 places)
 function buf2binstring(buf, len) {
-  // use fallback for big arrays to avoid stack overflow
-  if (len < 65537) {
+  // On Chrome, the arguments in a function call that are allowed is `65534`.
+  // If the length of the buffer is smaller than that, we can use this optimization,
+  // otherwise we will take a slower path.
+  if (len < 65534) {
     if ((buf.subarray && STR_APPLY_UIA_OK) || (!buf.subarray && STR_APPLY_OK)) {
       return String.fromCharCode.apply(null, utils.shrinkBuf(buf, len));
     }
@@ -8660,7 +8724,7 @@ function deflate(strm, flush) {
                     (!s.gzhead.extra ? 0 : 4) +
                     (!s.gzhead.name ? 0 : 8) +
                     (!s.gzhead.comment ? 0 : 16)
-                );
+        );
         put_byte(s, s.gzhead.time & 0xff);
         put_byte(s, (s.gzhead.time >> 8) & 0xff);
         put_byte(s, (s.gzhead.time >> 16) & 0xff);
@@ -11445,6 +11509,8 @@ module.exports = {
 //   misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 
+/* eslint-disable space-unary-ops */
+
 var utils = require('../utils/common');
 
 /* Public constants ==========================================================*/
@@ -13382,6 +13448,10 @@ module.exports = function(buffer, encoding) {
 	      wkt.a = geogcs.DATUM.SPHEROID.a;
 	      wkt.rf = parseFloat(geogcs.DATUM.SPHEROID.rf, 10);
 	    }
+
+	    if (geogcs.DATUM && geogcs.DATUM.TOWGS84) {
+	      wkt.datum_params = geogcs.DATUM.TOWGS84;
+	    }
 	    if (~wkt.datumCode.indexOf('osgb_1936')) {
 	      wkt.datumCode = 'osgb36';
 	    }
@@ -13391,6 +13461,12 @@ module.exports = function(buffer, encoding) {
 	    if (~wkt.datumCode.indexOf('tm65')
 	      || ~wkt.datumCode.indexOf('geodetic_datum_of_1965')) {
 	      wkt.datumCode = 'ire65';
+	    }
+	    if (wkt.datumCode === 'ch1903+') {
+	      wkt.datumCode = 'ch1903';
+	    }
+	    if (~wkt.datumCode.indexOf('israel')) {
+	      wkt.datumCode = 'isr93';
 	    }
 	  }
 	  if (wkt.b && !isFinite(wkt.b)) {
@@ -13414,9 +13490,11 @@ module.exports = function(buffer, encoding) {
 	    ['latitude_of_origin', 'Central_Parallel'],
 	    ['scale_factor', 'Scale_Factor'],
 	    ['k0', 'scale_factor'],
+	    ['latitude_of_center', 'Latitude_Of_Center'],
 	    ['latitude_of_center', 'Latitude_of_center'],
 	    ['lat0', 'latitude_of_center', d2r],
 	    ['longitude_of_center', 'Longitude_Of_Center'],
+	    ['longitude_of_center', 'Longitude_of_center'],
 	    ['longc', 'longitude_of_center', d2r],
 	    ['x0', 'false_easting', toMeter],
 	    ['y0', 'false_northing', toMeter],
@@ -13425,6 +13503,7 @@ module.exports = function(buffer, encoding) {
 	    ['lat0', 'standard_parallel_1', d2r],
 	    ['lat1', 'standard_parallel_1', d2r],
 	    ['lat2', 'standard_parallel_2', d2r],
+	    ['azimuth', 'Azimuth'],
 	    ['alpha', 'azimuth', d2r],
 	    ['srsCode', 'name']
 	  ];
@@ -13506,11 +13585,27 @@ module.exports = function(buffer, encoding) {
 	function testDef(code){
 	  return code in defs;
 	}
-	 var codeWords = ['PROJECTEDCRS', 'PROJCRS', 'GEOGCS','GEOCCS','PROJCS','LOCAL_CS', 'GEODCRS', 'GEODETICCRS', 'GEODETICDATUM', 'ENGCRS', 'ENGINEERINGCRS']; 
+	 var codeWords = ['PROJECTEDCRS', 'PROJCRS', 'GEOGCS','GEOCCS','PROJCS','LOCAL_CS', 'GEODCRS', 'GEODETICCRS', 'GEODETICDATUM', 'ENGCRS', 'ENGINEERINGCRS'];
 	function testWKT(code){
 	  return codeWords.some(function (word) {
 	    return code.indexOf(word) > -1;
 	  });
+	}
+	var codes = ['3857', '900913', '3785', '102113'];
+	function checkMercator(item) {
+	  var auth = match(item, 'authority');
+	  if (!auth) {
+	    return;
+	  }
+	  var code = match(auth, 'epsg');
+	  return code && codes.indexOf(code) > -1;
+	}
+	function checkProjStr(item) {
+	  var ext = match(item, 'extension');
+	  if (!ext) {
+	    return;
+	  }
+	  return match(ext, 'proj4');
 	}
 	function testProj(code){
 	  return code[0] === '+';
@@ -13522,7 +13617,16 @@ module.exports = function(buffer, encoding) {
 	      return defs[code];
 	    }
 	    if (testWKT(code)) {
-	      return wkt(code);
+	      var out = wkt(code);
+	      // test of spetial case, due to this being a very common and often malformed
+	      if (checkMercator(out)) {
+	        return defs['EPSG:3857'];
+	      }
+	      var maybeProjStr = checkProjStr(out);
+	      if (maybeProjStr) {
+	        return parseProj(maybeProjStr);
+	      }
+	      return out;
 	    }
 	    if (testProj(code)) {
 	      return parseProj(code);
@@ -13694,7 +13798,7 @@ module.exports = function(buffer, encoding) {
 	};
 
 	var projs = [merc, longlat];
-	var names$$1 = {};
+	var names = {};
 	var projStore = [];
 
 	function add(proj, i) {
@@ -13705,7 +13809,7 @@ module.exports = function(buffer, encoding) {
 	  }
 	  projStore[len] = proj;
 	  proj.names.forEach(function(n) {
-	    names$$1[n.toLowerCase()] = len;
+	    names[n.toLowerCase()] = len;
 	  });
 	  return this;
 	}
@@ -13715,8 +13819,8 @@ module.exports = function(buffer, encoding) {
 	    return false;
 	  }
 	  var n = name.toLowerCase();
-	  if (typeof names$$1[n] !== 'undefined' && projStore[names$$1[n]]) {
-	    return projStore[names$$1[n]];
+	  if (typeof names[n] !== 'undefined' && projStore[names[n]]) {
+	    return projStore[names[n]];
 	  }
 	}
 
@@ -14168,9 +14272,9 @@ module.exports = function(buffer, encoding) {
 	  return out;
 	}
 
-	function Projection$1(srsCode,callback) {
-	  if (!(this instanceof Projection$1)) {
-	    return new Projection$1(srsCode);
+	function Projection(srsCode,callback) {
+	  if (!(this instanceof Projection)) {
+	    return new Projection(srsCode);
 	  }
 	  callback = callback || function(error){
 	    if(error){
@@ -14182,7 +14286,7 @@ module.exports = function(buffer, encoding) {
 	    callback(srsCode);
 	    return;
 	  }
-	  var ourProj = Projection$1.projections.get(json.projName);
+	  var ourProj = Projection.projections.get(json.projName);
 	  if(!ourProj){
 	    callback(srsCode);
 	    return;
@@ -14226,9 +14330,10 @@ module.exports = function(buffer, encoding) {
 	  callback(null, this);
 
 	}
-	Projection$1.projections = projections;
-	Projection$1.projections.start();
+	Projection.projections = projections;
+	Projection.projections.start();
 
+	'use strict';
 	function compareDatums(source, dest) {
 	  if (source.datum_type !== dest.datum_type) {
 	    return false; // false, datums are not equal
@@ -14277,10 +14382,13 @@ module.exports = function(buffer, encoding) {
 	    Latitude = -HALF_PI;
 	  } else if (Latitude > HALF_PI && Latitude < 1.001 * HALF_PI) {
 	    Latitude = HALF_PI;
-	  } else if ((Latitude < -HALF_PI) || (Latitude > HALF_PI)) {
+	  } else if (Latitude < -HALF_PI) {
 	    /* Latitude out of range */
 	    //..reportError('geocent:lat out of range:' + Latitude);
-	    return null;
+	    return { x: -Infinity, y: -Infinity, z: p.z };
+	  } else if (Latitude > HALF_PI) {
+	    /* Latitude out of range */
+	    return { x: Infinity, y: Infinity, z: p.z };
 	  }
 
 	  if (Longitude > Math.PI) {
@@ -14602,7 +14710,7 @@ module.exports = function(buffer, encoding) {
 	  checkSanity(point);
 	  // Workaround for datum shifts towgs84, if either source or destination projection is not wgs84
 	  if (source.datum && dest.datum && checkNotWGS(source, dest)) {
-	    wgs84 = new Projection$1('WGS84');
+	    wgs84 = new Projection('WGS84');
 	    point = transform(source, wgs84, point);
 	    source = wgs84;
 	  }
@@ -14666,7 +14774,7 @@ module.exports = function(buffer, encoding) {
 	  return point;
 	}
 
-	var wgs84 = Projection$1('WGS84');
+	var wgs84 = Projection('WGS84');
 
 	function transformer(from, to, coords) {
 	  var transformedArray, out, keys;
@@ -14696,13 +14804,13 @@ module.exports = function(buffer, encoding) {
 	}
 
 	function checkProj(item) {
-	  if (item instanceof Projection$1) {
+	  if (item instanceof Projection) {
 	    return item;
 	  }
 	  if (item.oProj) {
 	    return item.oProj;
 	  }
-	  return Projection$1(item);
+	  return Projection(item);
 	}
 	function proj4$1(fromProj, toProj, coord) {
 	  fromProj = checkProj(fromProj);
@@ -15515,7 +15623,7 @@ module.exports = function(buffer, encoding) {
 	  return forward$1([this.x, this.y], accuracy);
 	};
 
-	var version = "2.4.4";
+	var version = "2.5.0";
 
 	var C00 = 1;
 	var C02 = 0.25;
@@ -16134,7 +16242,7 @@ module.exports = function(buffer, encoding) {
 	  return p;
 	}
 
-	var names$6 = ["Stereographic_North_Pole", "Oblique_Stereographic", "Polar_Stereographic", "sterea","Oblique Stereographic Alternative"];
+	var names$6 = ["Stereographic_North_Pole", "Oblique_Stereographic", "Polar_Stereographic", "sterea","Oblique Stereographic Alternative","Double_Stereographic"];
 	var sterea = {
 	  init: init$5,
 	  forward: forward$4,
@@ -16239,7 +16347,7 @@ module.exports = function(buffer, encoding) {
 	  var lon, lat, ts, ce, Chi;
 	  var rh = Math.sqrt(p.x * p.x + p.y * p.y);
 	  if (this.sphere) {
-	    var c = 2 * Math.atan(rh / (0.5 * this.a * this.k0));
+	    var c = 2 * Math.atan(rh / (2 * this.a * this.k0));
 	    lon = this.long0;
 	    lat = this.lat0;
 	    if (rh <= EPSLN) {
@@ -19094,6 +19202,165 @@ module.exports = function(buffer, encoding) {
 	  names: names$28
 	};
 
+	// Robinson projection
+	// Based on https://github.com/OSGeo/proj.4/blob/master/src/PJ_robin.c
+	// Polynomial coeficients from http://article.gmane.org/gmane.comp.gis.proj-4.devel/6039
+
+	var COEFS_X = [
+	    [1.0000, 2.2199e-17, -7.15515e-05, 3.1103e-06],
+	    [0.9986, -0.000482243, -2.4897e-05, -1.3309e-06],
+	    [0.9954, -0.00083103, -4.48605e-05, -9.86701e-07],
+	    [0.9900, -0.00135364, -5.9661e-05, 3.6777e-06],
+	    [0.9822, -0.00167442, -4.49547e-06, -5.72411e-06],
+	    [0.9730, -0.00214868, -9.03571e-05, 1.8736e-08],
+	    [0.9600, -0.00305085, -9.00761e-05, 1.64917e-06],
+	    [0.9427, -0.00382792, -6.53386e-05, -2.6154e-06],
+	    [0.9216, -0.00467746, -0.00010457, 4.81243e-06],
+	    [0.8962, -0.00536223, -3.23831e-05, -5.43432e-06],
+	    [0.8679, -0.00609363, -0.000113898, 3.32484e-06],
+	    [0.8350, -0.00698325, -6.40253e-05, 9.34959e-07],
+	    [0.7986, -0.00755338, -5.00009e-05, 9.35324e-07],
+	    [0.7597, -0.00798324, -3.5971e-05, -2.27626e-06],
+	    [0.7186, -0.00851367, -7.01149e-05, -8.6303e-06],
+	    [0.6732, -0.00986209, -0.000199569, 1.91974e-05],
+	    [0.6213, -0.010418, 8.83923e-05, 6.24051e-06],
+	    [0.5722, -0.00906601, 0.000182, 6.24051e-06],
+	    [0.5322, -0.00677797, 0.000275608, 6.24051e-06]
+	];
+
+	var COEFS_Y = [
+	    [-5.20417e-18, 0.0124, 1.21431e-18, -8.45284e-11],
+	    [0.0620, 0.0124, -1.26793e-09, 4.22642e-10],
+	    [0.1240, 0.0124, 5.07171e-09, -1.60604e-09],
+	    [0.1860, 0.0123999, -1.90189e-08, 6.00152e-09],
+	    [0.2480, 0.0124002, 7.10039e-08, -2.24e-08],
+	    [0.3100, 0.0123992, -2.64997e-07, 8.35986e-08],
+	    [0.3720, 0.0124029, 9.88983e-07, -3.11994e-07],
+	    [0.4340, 0.0123893, -3.69093e-06, -4.35621e-07],
+	    [0.4958, 0.0123198, -1.02252e-05, -3.45523e-07],
+	    [0.5571, 0.0121916, -1.54081e-05, -5.82288e-07],
+	    [0.6176, 0.0119938, -2.41424e-05, -5.25327e-07],
+	    [0.6769, 0.011713, -3.20223e-05, -5.16405e-07],
+	    [0.7346, 0.0113541, -3.97684e-05, -6.09052e-07],
+	    [0.7903, 0.0109107, -4.89042e-05, -1.04739e-06],
+	    [0.8435, 0.0103431, -6.4615e-05, -1.40374e-09],
+	    [0.8936, 0.00969686, -6.4636e-05, -8.547e-06],
+	    [0.9394, 0.00840947, -0.000192841, -4.2106e-06],
+	    [0.9761, 0.00616527, -0.000256, -4.2106e-06],
+	    [1.0000, 0.00328947, -0.000319159, -4.2106e-06]
+	];
+
+	var FXC = 0.8487;
+	var FYC = 1.3523;
+	var C1 = R2D/5; // rad to 5-degree interval
+	var RC1 = 1/C1;
+	var NODES = 18;
+
+	var poly3_val = function(coefs, x) {
+	    return coefs[0] + x * (coefs[1] + x * (coefs[2] + x * coefs[3]));
+	};
+
+	var poly3_der = function(coefs, x) {
+	    return coefs[1] + x * (2 * coefs[2] + x * 3 * coefs[3]);
+	};
+
+	function newton_rapshon(f_df, start, max_err, iters) {
+	    var x = start;
+	    for (; iters; --iters) {
+	        var upd = f_df(x);
+	        x -= upd;
+	        if (Math.abs(upd) < max_err) {
+	            break;
+	        }
+	    }
+	    return x;
+	}
+
+	function init$28() {
+	    this.x0 = this.x0 || 0;
+	    this.y0 = this.y0 || 0;
+	    this.long0 = this.long0 || 0;
+	    this.es = 0;
+	    this.title = this.title || "Robinson";
+	}
+
+	function forward$27(ll) {
+	    var lon = adjust_lon(ll.x - this.long0);
+
+	    var dphi = Math.abs(ll.y);
+	    var i = Math.floor(dphi * C1);
+	    if (i < 0) {
+	        i = 0;
+	    } else if (i >= NODES) {
+	        i = NODES - 1;
+	    }
+	    dphi = R2D * (dphi - RC1 * i);
+	    var xy = {
+	        x: poly3_val(COEFS_X[i], dphi) * lon,
+	        y: poly3_val(COEFS_Y[i], dphi)
+	    };
+	    if (ll.y < 0) {
+	        xy.y = -xy.y;
+	    }
+
+	    xy.x = xy.x * this.a * FXC + this.x0;
+	    xy.y = xy.y * this.a * FYC + this.y0;
+	    return xy;
+	}
+
+	function inverse$27(xy) {
+	    var ll = {
+	        x: (xy.x - this.x0) / (this.a * FXC),
+	        y: Math.abs(xy.y - this.y0) / (this.a * FYC)
+	    };
+
+	    if (ll.y >= 1) { // pathologic case
+	        ll.x /= COEFS_X[NODES][0];
+	        ll.y = xy.y < 0 ? -HALF_PI : HALF_PI;
+	    } else {
+	        // find table interval
+	        var i = Math.floor(ll.y * NODES);
+	        if (i < 0) {
+	            i = 0;
+	        } else if (i >= NODES) {
+	            i = NODES - 1;
+	        }
+	        for (;;) {
+	            if (COEFS_Y[i][0] > ll.y) {
+	                --i;
+	            } else if (COEFS_Y[i+1][0] <= ll.y) {
+	                ++i;
+	            } else {
+	                break;
+	            }
+	        }
+	        // linear interpolation in 5 degree interval
+	        var coefs = COEFS_Y[i];
+	        var t = 5 * (ll.y - coefs[0]) / (COEFS_Y[i+1][0] - coefs[0]);
+	        // find t so that poly3_val(coefs, t) = ll.y
+	        t = newton_rapshon(function(x) {
+	            return (poly3_val(coefs, x) - ll.y) / poly3_der(coefs, x);
+	        }, t, EPSLN, 100);
+
+	        ll.x /= poly3_val(COEFS_X[i], t);
+	        ll.y = (5 * i + t) * D2R;
+	        if (xy.y < 0) {
+	            ll.y = -ll.y;
+	        }
+	    }
+
+	    ll.x = adjust_lon(ll.x + this.long0);
+	    return ll;
+	}
+
+	var names$29 = ["Robinson", "robin"];
+	var robin = {
+	  init: init$28,
+	  forward: forward$27,
+	  inverse: inverse$27,
+	  names: names$29
+	};
+
 	var includedProjections = function(proj4){
 	  proj4.Proj.projections.add(tmerc);
 	  proj4.Proj.projections.add(etmerc);
@@ -19120,10 +19387,11 @@ module.exports = function(buffer, encoding) {
 	  proj4.Proj.projections.add(aeqd);
 	  proj4.Proj.projections.add(ortho);
 	  proj4.Proj.projections.add(qsc);
+	  proj4.Proj.projections.add(robin);
 	};
 
 	proj4$1.defaultDatum = 'WGS84'; //default datum
-	proj4$1.Proj = Projection$1;
+	proj4$1.Proj = Projection;
 	proj4$1.WGS84 = new proj4$1.Proj('WGS84');
 	proj4$1.Point = Point;
 	proj4$1.toPoint = toPoint;
@@ -22715,11 +22983,11 @@ function toBuffer(b) {
   }
 }
 
-function shp(base, whiteList) {
+function shp(base, whiteList, options) {
   if (typeof base === 'string' && cache.has(base)) {
     return Promise.resolve(cache.get(base));
   }
-  return shp.getShapefile(base, whiteList).then(function(resp) {
+  return shp.getShapefile(base, whiteList, options).then(function(resp) {
     if (typeof base === 'string') {
       cache.set(base, resp);
     }
@@ -22742,12 +23010,15 @@ shp.combine = function(arr) {
   }
   return out;
 };
-shp.parseZip = function(buffer, whiteList) {
+shp.parseZip = function(buffer, whiteList, options) {
   var key;
   buffer = toBuffer(buffer);
   var zip = unzip(buffer);
   var names = [];
   whiteList = whiteList || [];
+  options = options || {}
+  var targetProjection = options && (typeof options.targetProjection === 'string') && options.targetProjection
+  var reproject        = options && options.reproject === true
   for (key in zip) {
     if (key.indexOf('__MACOSX') !== -1) {
       continue;
@@ -22756,7 +23027,7 @@ shp.parseZip = function(buffer, whiteList) {
       names.push(key.slice(0, -4));
       zip[key.slice(0, -3) + key.slice(-3).toLowerCase()] = zip[key];
     } else if (key.slice(-3).toLowerCase() === 'prj') {
-      zip[key.slice(0, -3) + key.slice(-3).toLowerCase()] = proj4(zip[key]);
+      zip[key.slice(0, -3) + key.slice(-3).toLowerCase()] = (reproject && proj4(zip[key], targetProjection)) || undefined;
     } else if (key.slice(-4).toLowerCase() === 'json' || whiteList.indexOf(key.split('.').pop()) > -1) {
       names.push(key.slice(0, -3) + key.slice(-3).toLowerCase());
     } else if (key.slice(-3).toLowerCase() === 'dbf' || key.slice(-3).toLowerCase() === 'cpg') {
@@ -22796,17 +23067,21 @@ function getZip(base, whiteList) {
     return shp.parseZip(a, whiteList);
   });
 }
-shp.getShapefile = function(base, whiteList) {
+shp.getShapefile = function(base, whiteList, options) {
   if (typeof base === 'string') {
     if (base.slice(-4).toLowerCase() === '.zip') {
-      return getZip(base, whiteList);
+      return getZip(base, whiteList, options);
     } else {
+      var targetProjection = options && (typeof options.targetProjection === 'string') && options.targetProjection
+      var reproject        = options && options.reproject === true
+
       return Promise.all([
         Promise.all([
           binaryAjax(base + '.shp'),
           binaryAjax(base + '.prj')
         ]).then(function(args) {
-          return parseShp(args[0], args[1] ? proj4(args[1]) : false);
+          const projection = reproject && args[1] && proj4(args[1], targetProjection)
+          return parseShp(args[0], projection);
         }),
         Promise.all([
           binaryAjax(base + '.dbf'),
@@ -22822,17 +23097,16 @@ shp.getShapefile = function(base, whiteList) {
     });
   }
 };
-shp.parseShp = function(shp, prj) {
+shp.parseShp = function(shp, prj, options) {
   shp = toBuffer(shp);
   if (Buffer.isBuffer(prj)) {
     prj = prj.toString();
   }
-  if (typeof prj === 'string') {
-    prj = proj4(prj);
-    return parseShp(shp, prj);
-  } else {
-    return parseShp(shp);
-  }
+
+  var targetProjection = options && (typeof options.targetProjection === 'string') && options.targetProjection
+  var reproject        = options && options.reproject === true
+  var projection       = reproject && (typeof prj === 'string') && proj4(prj, targetProjection)
+  return parseShp(shp, projection);
 };
 shp.parseDbf = function(dbf, cpg) {
   dbf = toBuffer(dbf);
